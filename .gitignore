@@ -1,0 +1,12 @@
+# Build output
+/bin/
+
+# BoltDB data files created when running cmd/node locally
+*.db
+
+# Local run logs
+*.log
+
+# Go
+*.test
+*.out

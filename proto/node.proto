@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package node;
+
+option go_package = "github.com/lancsnet/multi-region/proto";
+
+message LogEntry {
+  string id = 1;
+  string node_id = 2;
+  int64 timestamp = 3;
+  bytes payload = 4;
+}
+
+message ConfigPayload {
+  string version = 1;
+  bytes data = 2;
+}
+
+message StreamMessage {
+  oneof body {
+    LogEntry log = 1;
+    ConfigPayload config = 2;
+  }
+}
+
+service NodeService {
+  rpc Stream(stream StreamMessage) returns (stream StreamMessage);
+}

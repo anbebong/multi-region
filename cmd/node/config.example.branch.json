@@ -1,0 +1,7 @@
+{
+  "id": "branch-1",
+  "listen_addr": "127.0.0.1:9444",
+  "parent_addr": "127.0.0.1:9443",
+  "storage_path": "./branch.db",
+  "http_addr": "127.0.0.1:8081"
+}

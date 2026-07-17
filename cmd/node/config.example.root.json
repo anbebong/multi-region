@@ -1,0 +1,6 @@
+{
+  "id": "root",
+  "listen_addr": "127.0.0.1:9443",
+  "storage_path": "./root.db",
+  "http_addr": "127.0.0.1:8080"
+}
