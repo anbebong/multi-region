@@ -6,20 +6,37 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/anbebong/multi-region/proto"
 	"github.com/anbebong/multi-region/resolver"
 )
+
+// reconnectInterval is how often Client checks whether its stream to the
+// parent has gone away (e.g. the parent rejected the connection via
+// AuthorizeChild, or a network outage closed it) and retries opening a new
+// one — regardless of whether anything is being sent upstream at the time.
+// Without this, a child rejected for having no approval yet would never
+// notice once it's later approved unless something happened to call
+// SendUpstream.
+const reconnectInterval = 3 * time.Second
+
+// nodeIDMetadataKey is the gRPC metadata key a child sends its own logical
+// node ID under when opening a stream, so the parent's transport.Server can
+// track children by that ID instead of an opaque connection counter.
+const nodeIDMetadataKey = "node-id"
 
 // DownstreamHandler is invoked for every Envelope this client receives from
 // its parent. The framework does not interpret env.Kind or env.Payload.
 type DownstreamHandler func(env *proto.Envelope)
 
 type Client struct {
+	nodeID       string
 	resolver     resolver.Resolver
 	authn        Authenticator
 	onDownstream DownstreamHandler
@@ -36,8 +53,8 @@ type Client struct {
 	closed  bool
 }
 
-func NewClient(r resolver.Resolver, authn Authenticator, onDownstream DownstreamHandler) *Client {
-	return &Client{resolver: r, authn: authn, onDownstream: onDownstream}
+func NewClient(nodeID string, r resolver.Resolver, authn Authenticator, onDownstream DownstreamHandler) *Client {
+	return &Client{nodeID: nodeID, resolver: r, authn: authn, onDownstream: onDownstream}
 }
 
 func (c *Client) Connect(ctx context.Context) error {
@@ -75,7 +92,45 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.mu.Unlock()
 
-	return c.reopenStream()
+	if err := c.reopenStream(); err != nil {
+		// Initial connection attempt failed (e.g. this node-id is not yet
+		// approved by the parent's AuthorizeChild policy). Don't give up —
+		// reconnectLoop will keep retrying in the background, exactly as it
+		// does for a stream that dies later.
+		log.Printf("[transport] initial stream open failed, will keep retrying: %v", err)
+	}
+	go c.reconnectLoop(ctx)
+	return nil
+}
+
+// reconnectLoop periodically checks whether the client currently has no
+// live stream to the parent — because the initial connection was rejected,
+// the parent restarted, or a network outage closed it — and retries
+// opening a new one. This runs independently of SendUpstream, so a child
+// that isn't currently trying to send anything still notices and recovers
+// once the parent approves it or comes back.
+func (c *Client) reconnectLoop(ctx context.Context) {
+	ticker := time.NewTicker(reconnectInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			closed := c.closed
+			needsReconnect := c.stream == nil
+			c.mu.Unlock()
+			if closed {
+				return
+			}
+			if needsReconnect {
+				if err := c.reopenStream(); err != nil {
+					log.Printf("[transport] reconnect attempt failed, will retry: %v", err)
+				}
+			}
+		}
+	}
 }
 
 // reopenStream opens a fresh Stream RPC on the existing ClientConn and
@@ -97,6 +152,7 @@ func (c *Client) reopenStream() error {
 	c.mu.Unlock()
 
 	streamCtx, cancel := context.WithCancel(baseCtx)
+	streamCtx = metadata.AppendToOutgoingContext(streamCtx, nodeIDMetadataKey, c.nodeID)
 	stream, err := proto.NewNodeServiceClient(conn).Stream(streamCtx)
 	if err != nil {
 		cancel()
@@ -118,6 +174,14 @@ func (c *Client) recvLoop(stream proto.NodeService_StreamClient) {
 		msg, err := stream.Recv()
 		if err != nil {
 			log.Printf("[transport] stream to parent closed: %v", err)
+			c.mu.Lock()
+			// Only clear c.stream if it's still this recvLoop's stream — a
+			// newer reopenStream call may have already replaced it, and we
+			// must not clobber that newer, live stream.
+			if c.stream == stream {
+				c.stream = nil
+			}
+			c.mu.Unlock()
 			return
 		}
 		if env := msg.GetDownstream(); env != nil && c.onDownstream != nil {
@@ -134,7 +198,15 @@ func (c *Client) SendUpstream(ctx context.Context, env *proto.Envelope) error {
 	stream := c.stream
 	c.mu.Unlock()
 	if stream == nil {
-		return fmt.Errorf("client not connected")
+		// No live stream (e.g. recvLoop detected the previous one died).
+		// Try to open a fresh one — the parent may be back by now — before
+		// giving up.
+		if err := c.reopenStream(); err != nil {
+			return fmt.Errorf("client not connected: %w", err)
+		}
+		c.mu.Lock()
+		stream = c.stream
+		c.mu.Unlock()
 	}
 	err := stream.Send(&proto.StreamMessage{Direction: &proto.StreamMessage_Upstream{Upstream: env}})
 	if err != nil {

@@ -64,6 +64,8 @@ func main() {
 	}
 	defer store.Close()
 
+	allowList := newChildAllowList(cfg.AllowedChildIDs)
+
 	opts := []node.Option{
 		node.WithID(cfg.ID),
 	}
@@ -79,6 +81,8 @@ func main() {
 			log.Fatalf("configure mTLS: %v", err)
 		}
 		opts = append(opts, node.WithAuthenticator(authn))
+		opts = append(opts, node.WithAuthorizeChild(allowList.Authorize))
+		log.Printf("restricting children to node-ids: %v (editable via api/v1/admin/allowed-children)", allowList.List())
 	} else {
 		log.Printf("warning: no \"tls\" section in config — running with insecure gRPC (fine for local trials only)")
 	}
@@ -114,7 +118,7 @@ func main() {
 
 	var httpServer *http.Server
 	if cfg.HTTPAddr != "" {
-		httpServer = startAPIServer(cfg.HTTPAddr, n, store)
+		httpServer = startAPIServer(cfg.HTTPAddr, n, store, allowList)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -137,17 +141,24 @@ func main() {
 //   - GET  api/v1/admin/logs   — query this node's locally-stored log entries.
 //   - GET  api/v1/admin/status — this node's identity/connectivity summary.
 //   - GET  api/v1/admin/children — number of children currently connected.
-func startAPIServer(addr string, n *node.Node, store storage.Storage) *http.Server {
+//   - GET/POST/DELETE api/v1/admin/allowed-children — manage which node-ids
+//     may connect as children of this node, without editing config.json or
+//     restarting the process.
+func startAPIServer(addr string, n *node.Node, store storage.Storage, allowList *childAllowList) *http.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", handleDashboard)
 
-	mux.HandleFunc("POST /api/v1/agent/logs", handleAgentLog(n, store))
+	mux.HandleFunc("POST /api/v1/agent/logs", handleAgentLog(n))
 
 	mux.HandleFunc("POST /api/v1/admin/config", handleAdminConfig(n))
+	mux.HandleFunc("POST /api/v1/admin/config/{child_id}", handleAdminConfigForChild(n))
 	mux.HandleFunc("GET /api/v1/admin/logs", handleAdminLogs(store))
 	mux.HandleFunc("GET /api/v1/admin/status", handleAdminStatus(n))
 	mux.HandleFunc("GET /api/v1/admin/children", handleAdminChildren(n))
+	mux.HandleFunc("GET /api/v1/admin/allowed-children", handleGetAllowedChildren(allowList))
+	mux.HandleFunc("POST /api/v1/admin/allowed-children", handleApproveChild(allowList))
+	mux.HandleFunc("DELETE /api/v1/admin/allowed-children/{node_id}", handleRevokeChild(allowList))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
@@ -174,7 +185,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 // parent.
 //
 //	curl -X POST localhost:8080/api/v1/agent/logs -d '{"payload":"hello"}'
-func handleAgentLog(n *node.Node, store storage.Storage) http.HandlerFunc {
+func handleAgentLog(n *node.Node) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Payload string `json:"payload"`
@@ -214,6 +225,33 @@ func handleAdminConfig(n *node.Node) http.HandlerFunc {
 		if err := n.SendDown(r.Context(), kindConfig, []byte(req.Data)); err != nil {
 			log.Printf("[admin] SendDown failed: %v", err)
 			http.Error(w, fmt.Sprintf("send down: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// handleAdminConfigForChild pushes config to exactly one directly connected
+// child, identified by its node-id in the URL path. Unlike
+// handleAdminConfig (broadcast to all children), this targets a single
+// child — e.g. to give one branch a different parameter than its siblings.
+//
+//	curl -X POST localhost:8080/api/v1/admin/config/branch-1 -d '{"data":"..."}'
+func handleAdminConfigForChild(n *node.Node) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		childID := r.PathValue("child_id")
+		var req struct {
+			Data string `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("parse json: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("[admin] pushing config to child %q", childID)
+		if err := n.SendToChild(childID, kindConfig, []byte(req.Data)); err != nil {
+			log.Printf("[admin] SendToChild failed: %v", err)
+			http.Error(w, fmt.Sprintf("send to child: %v", err), http.StatusBadRequest)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -271,6 +309,58 @@ func handleAdminStatus(n *node.Node) http.HandlerFunc {
 func handleAdminChildren(n *node.Node) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]int{"children_count": n.ChildrenCount()})
+	}
+}
+
+// handleGetAllowedChildren lists the node-ids currently allowed to connect
+// as children of this node — the UI for this is the "Phê duyệt con kết
+// nối" section in dashboard.html.
+//
+//	curl localhost:8080/api/v1/admin/allowed-children
+func handleGetAllowedChildren(allowList *childAllowList) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string][]string{"allowed_child_ids": allowList.List()})
+	}
+}
+
+// handleApproveChild adds a node-id to the allow list at runtime — this is
+// the "approve" action: a child claiming this node-id (and presenting a
+// matching mTLS certificate) will be accepted on its next connection
+// attempt, without editing config.json or restarting the process.
+//
+//	curl -X POST localhost:8080/api/v1/admin/allowed-children -d '{"node_id":"branch-2"}'
+func handleApproveChild(allowList *childAllowList) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			NodeID string `json:"node_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("parse json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.NodeID == "" {
+			http.Error(w, `"node_id" is required`, http.StatusBadRequest)
+			return
+		}
+		allowList.Add(req.NodeID)
+		log.Printf("[admin] approved node-id %q to connect as a child", req.NodeID)
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, map[string][]string{"allowed_child_ids": allowList.List()})
+	}
+}
+
+// handleRevokeChild removes a node-id from the allow list at runtime — the
+// "reject/revoke" action. It does not disconnect a child that is already
+// connected (the approval check only runs once, at connection time); it
+// only prevents that node-id from connecting again in the future.
+//
+//	curl -X DELETE localhost:8080/api/v1/admin/allowed-children/branch-2
+func handleRevokeChild(allowList *childAllowList) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID := r.PathValue("node_id")
+		allowList.Remove(nodeID)
+		log.Printf("[admin] revoked node-id %q from the allowed list", nodeID)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

@@ -1,6 +1,12 @@
 {
-  "id": "root",
+  "id": "TRUNG-UONG",
   "listen_addr": "127.0.0.1:9443",
-  "storage_path": "./root.db",
-  "http_addr": "127.0.0.1:8080"
+  "storage_path": "./trunguong.db",
+  "http_addr": "127.0.0.1:8080",
+  "tls": {
+    "ca_cert_path": "./examples/node/certs/ca.pem",
+    "cert_path": "./examples/node/certs/TRUNG-UONG.pem",
+    "key_path": "./examples/node/certs/TRUNG-UONG.key"
+  },
+  "allowed_child_ids": ["TINH"]
 }

@@ -41,6 +41,17 @@ type FileConfig struct {
 	// TLS is optional; when omitted the node runs with insecure gRPC
 	// (fine for local trials, NOT for production per the design spec).
 	TLS *TLSConfig `json:"tls,omitempty"`
+
+	// AllowedChildIDs, if non-empty, restricts which children may connect to
+	// this node: a connecting child must claim one of these node IDs (via
+	// the "node-id" it sends on connect), and that ID must also match the
+	// CommonName on its mTLS client certificate, or the connection is
+	// rejected. Only takes effect when TLS is set (mTLS is what makes a
+	// client certificate available to check in the first place). Leave
+	// empty/omit to accept any child whose certificate is signed by the
+	// configured CA — i.e. no additional per-child approval beyond the mTLS
+	// handshake itself.
+	AllowedChildIDs []string `json:"allowed_child_ids,omitempty"`
 }
 
 type TLSConfig struct {

@@ -34,7 +34,7 @@ func TestClient_SendUpstreamAndReceiveDownstream(t *testing.T) {
 	}
 
 	receivedDown := make(chan *proto.Envelope, 1)
-	client := NewClient(fixedResolver{addr: "bufnet"}, nil, func(env *proto.Envelope) {
+	client := NewClient("child-a", fixedResolver{addr: "bufnet"}, nil, func(env *proto.Envelope) {
 		receivedDown <- env
 	})
 	client.dialer = dialer

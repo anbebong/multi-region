@@ -1,0 +1,11 @@
+{
+  "id": "XA",
+  "parent_addr": "127.0.0.1:9444",
+  "storage_path": "./xa.db",
+  "http_addr": "127.0.0.1:8082",
+  "tls": {
+    "ca_cert_path": "./examples/node/certs/ca.pem",
+    "cert_path": "./examples/node/certs/XA.pem",
+    "key_path": "./examples/node/certs/XA.key"
+  }
+}

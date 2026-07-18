@@ -87,6 +87,9 @@ func (n *Node) OnDownstream(kind string, handler DownstreamHandler) {
 func (n *Node) Start(ctx context.Context) error {
 	if n.cfg.listenAddr != "" {
 		n.server = transport.NewServer(n.cfg.authn, n.handleUpstreamFromChild)
+		if n.cfg.authorizeChild != nil {
+			n.server.SetAuthorizeChild(n.cfg.authorizeChild)
+		}
 		go func() {
 			_ = n.server.Listen(n.cfg.listenAddr)
 		}()
@@ -94,7 +97,7 @@ func (n *Node) Start(ctx context.Context) error {
 	}
 
 	if n.cfg.resolver != nil {
-		n.client = transport.NewClient(n.cfg.resolver, n.cfg.authn, n.handleDownstreamFromParent)
+		n.client = transport.NewClient(n.cfg.id, n.cfg.resolver, n.cfg.authn, n.handleDownstreamFromParent)
 		if err := n.client.Connect(ctx); err != nil {
 			return fmt.Errorf("connect to parent: %w", err)
 		}
@@ -152,6 +155,22 @@ func (n *Node) SendDown(ctx context.Context, kind string, payload []byte) error 
 	}
 	env := newEnvelope(n.cfg.id, kind, payload)
 	return n.server.BroadcastDownstream(env)
+}
+
+// SendToChild pushes an Envelope of the given kind to exactly one of this
+// node's directly-connected children, identified by the node-id it claimed
+// when it connected (see transport.AuthorizeChild). Unlike SendDown, this
+// does not broadcast — it targets a single child, and returns an error if
+// no child with that ID is currently connected. It does not itself
+// propagate further down that child's own children; if that is desired,
+// the receiving node's own kind handler is responsible for calling SendDown
+// on its side.
+func (n *Node) SendToChild(childID, kind string, payload []byte) error {
+	if n.server == nil {
+		return fmt.Errorf("node %s has no children (WithListenAddr not set)", n.cfg.id)
+	}
+	env := newEnvelope(n.cfg.id, kind, payload)
+	return n.server.SendToChild(childID, env)
 }
 
 // SendUp is the entry point for locally-produced data (e.g. a service's own

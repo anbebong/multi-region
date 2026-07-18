@@ -29,6 +29,23 @@
   </section>
 
   <section>
+    <h2>Phê duyệt con kết nối</h2>
+    <p>Danh sách <code>node-id</code> được phép kết nối làm con của node
+    này. Chỉ có tác dụng khi node chạy với mTLS (<code>tls</code> trong
+    config.json) — con phải khai đúng <code>node-id</code> này và trình
+    chứng chỉ có CommonName trùng khớp.</p>
+    <table>
+      <thead><tr><th>node-id</th><th></th></tr></thead>
+      <tbody id="allowListBody"></tbody>
+    </table>
+    <div>
+      <input id="newChildId" placeholder="vd: branch-2">
+      <button onclick="approveChild()">Phê duyệt</button>
+    </div>
+    <div id="allowListError"></div>
+  </section>
+
+  <section>
     <h2>Logs cục bộ</h2>
     <button onclick="loadLogs()">Tải logs</button>
     <table>
@@ -39,7 +56,10 @@
   </section>
 
   <section>
-    <h2>Đẩy config xuống cây con</h2>
+    <h2>Đẩy config xuống con</h2>
+    <div>
+      <label>child_id (để trống = gửi cho tất cả con): <input id="configChildId" placeholder="vd: branch-1"></label>
+    </div>
     <div>
       <label>data:<br><textarea id="configData" rows="3" cols="60"></textarea></label>
     </div>
@@ -66,6 +86,58 @@ async function loadStatus() {
   }
 }
 
+async function loadAllowList() {
+  const body = document.getElementById('allowListBody');
+  const err = document.getElementById('allowListError');
+  body.innerHTML = '';
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/v1/admin/allowed-children');
+    const data = await r.json();
+    for (const id of (data.allowed_child_ids || []).sort()) {
+      const tr = document.createElement('tr');
+      const escaped = id.replace(/'/g, "\\'");
+      tr.innerHTML = `<td>${id}</td><td><button onclick="revokeChild('${escaped}')">Thu hồi</button></td>`;
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function approveChild() {
+  const input = document.getElementById('newChildId');
+  const nodeId = input.value.trim();
+  const err = document.getElementById('allowListError');
+  if (!nodeId) return;
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/v1/admin/allowed-children', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node_id: nodeId }),
+    });
+    if (!r.ok) throw new Error('status ' + r.status);
+    input.value = '';
+    await loadAllowList();
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function revokeChild(nodeId) {
+  const err = document.getElementById('allowListError');
+  try {
+    const r = await fetch('/api/v1/admin/allowed-children/' + encodeURIComponent(nodeId), {
+      method: 'DELETE',
+    });
+    if (!r.ok) throw new Error('status ' + r.status);
+    await loadAllowList();
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
+  }
+}
+
 async function loadLogs() {
   const body = document.getElementById('logsBody');
   const err = document.getElementById('logsError');
@@ -86,22 +158,29 @@ async function loadLogs() {
 }
 
 async function pushConfig() {
+  const childId = document.getElementById('configChildId').value.trim();
   const data = document.getElementById('configData').value;
   const result = document.getElementById('configResult');
   result.textContent = 'đang gửi...';
   try {
-    const r = await fetch('/api/v1/admin/config', {
+    const url = childId
+      ? '/api/v1/admin/config/' + encodeURIComponent(childId)
+      : '/api/v1/admin/config';
+    const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data }),
     });
-    result.textContent = r.ok ? 'đã đẩy config xuống cây con.' : 'lỗi: ' + r.status;
+    result.textContent = r.ok
+      ? (childId ? `đã gửi config cho con "${childId}".` : 'đã đẩy config xuống cây con.')
+      : 'lỗi: ' + r.status;
   } catch (e) {
     result.textContent = 'lỗi: ' + e;
   }
 }
 
 loadStatus();
+loadAllowList();
 loadLogs();
 </script>
 </body>

@@ -4,6 +4,10 @@
 # BoltDB data files created when running examples/node locally
 *.db
 
+# Self-signed certs generated locally by examples/gencert for manual mTLS
+# trials — private keys, never commit.
+/examples/node/certs/
+
 # Local run logs
 *.log
 
