@@ -159,6 +159,7 @@ func startAPIServer(addr string, n *node.Node, store storage.Storage, allowList 
 	mux.HandleFunc("GET /api/v1/admin/allowed-children", handleGetAllowedChildren(allowList))
 	mux.HandleFunc("POST /api/v1/admin/allowed-children", handleApproveChild(allowList))
 	mux.HandleFunc("DELETE /api/v1/admin/allowed-children/{node_id}", handleRevokeChild(allowList))
+	mux.HandleFunc("GET /api/v1/admin/pending-children", handlePendingChildren(n))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
@@ -222,9 +223,15 @@ func handleAdminConfig(n *node.Node) http.HandlerFunc {
 		}
 
 		log.Printf("[admin] pushing config to %d connected children", n.ChildrenCount())
-		if err := n.SendDown(r.Context(), kindConfig, []byte(req.Data)); err != nil {
-			log.Printf("[admin] SendDown failed: %v", err)
-			http.Error(w, fmt.Sprintf("send down: %v", err), http.StatusInternalServerError)
+		result, err := n.SendDown(r.Context(), kindConfig, []byte(req.Data))
+		if err != nil {
+			// Some children's send buffers were full — the framework does
+			// not retry this on its own. We report it back to the admin
+			// caller rather than silently losing it; a service that needs
+			// guaranteed delivery would re-send to result.Dropped later.
+			log.Printf("[admin] SendDown: dropped for children %v: %v", result.Dropped, err)
+			w.WriteHeader(http.StatusPartialContent)
+			writeJSON(w, map[string]any{"delivered": result.Delivered, "dropped": result.Dropped})
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -361,6 +368,28 @@ func handleRevokeChild(allowList *childAllowList) http.HandlerFunc {
 		allowList.Remove(nodeID)
 		log.Printf("[admin] revoked node-id %q from the allowed list", nodeID)
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handlePendingChildren lists node-ids currently asking to connect but
+// rejected (not yet in the allow list) — the "who's asking to join" view
+// that the "Phê duyệt con kết nối" dashboard section is built on. A pending
+// entry disappears once that node-id is approved and successfully
+// connects.
+//
+//	curl localhost:8080/api/v1/admin/pending-children
+func handlePendingChildren(n *node.Node) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pending := n.PendingChildren()
+		out := make([]map[string]any, 0, len(pending))
+		for _, p := range pending {
+			out = append(out, map[string]any{
+				"node_id":     p.NodeID,
+				"first_seen":  p.FirstSeen.Unix(),
+				"last_reason": p.LastReason,
+			})
+		}
+		writeJSON(w, out)
 	}
 }
 

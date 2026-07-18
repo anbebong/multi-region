@@ -8,6 +8,5 @@
     "ca_cert_path": "./examples/node/certs/ca.pem",
     "cert_path": "./examples/node/certs/TINH.pem",
     "key_path": "./examples/node/certs/TINH.key"
-  },
-  "allowed_child_ids": ["XA"]
+  }
 }

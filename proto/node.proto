@@ -16,18 +16,23 @@ message Envelope {
   int64 timestamp = 4;
 }
 
-// StreamMessage carries an Envelope in exactly one direction on the shared
-// bidirectional stream: upstream (child -> parent) or downstream
-// (parent -> child). The framework forwards each direction recursively
-// (upstream keeps going up if this node itself has a parent; downstream
-// keeps going down to this node's own children) without inspecting kind.
-message StreamMessage {
-  oneof direction {
-    Envelope upstream = 1;
-    Envelope downstream = 2;
-  }
-}
+message Ack {}
 
+// NodeService exposes upstream and downstream as two independent RPCs
+// (rather than a single bidirectional stream carrying both directions) so
+// that a slow/blocked send in one direction can never stall delivery in the
+// other. A child opens both when it connects to a parent; each is its own
+// TCP/HTTP2 connection under the hood.
 service NodeService {
-  rpc Stream(stream StreamMessage) returns (stream StreamMessage);
+  // Upstream is a client-streaming RPC: the child keeps sending Envelopes as
+  // it produces them; the parent acks once when the child closes the
+  // stream. The child's claimed node-id travels as the "node-id" gRPC
+  // metadata header on the call, exactly as before.
+  rpc Upstream(stream Envelope) returns (Ack);
+
+  // Downstream is a server-streaming RPC: the child opens it once (empty
+  // request) and the parent pushes Envelopes down it for as long as the
+  // child stays connected. The child's claimed node-id also travels as the
+  // "node-id" gRPC metadata header on this call.
+  rpc Downstream(Ack) returns (stream Envelope);
 }

@@ -29,7 +29,20 @@
   </section>
 
   <section>
-    <h2>Phê duyệt con kết nối</h2>
+    <h2>Đang chờ duyệt</h2>
+    <p>Các <code>node-id</code> vừa cố kết nối làm con nhưng bị từ chối vì
+    chưa nằm trong danh sách được phép — bấm "Phê duyệt" để cho vào ngay
+    (con tự động thử kết nối lại, không cần restart nó).</p>
+    <table>
+      <thead><tr><th>node-id</th><th>lý do từ chối</th><th></th></tr></thead>
+      <tbody id="pendingBody"></tbody>
+    </table>
+    <div id="pendingEmpty" style="display:none; color:#666; font-size:0.9rem;">Không có ai đang chờ duyệt.</div>
+    <div id="pendingError"></div>
+  </section>
+
+  <section>
+    <h2>Danh sách đã phê duyệt</h2>
     <p>Danh sách <code>node-id</code> được phép kết nối làm con của node
     này. Chỉ có tác dụng khi node chạy với mTLS (<code>tls</code> trong
     config.json) — con phải khai đúng <code>node-id</code> này và trình
@@ -40,7 +53,7 @@
     </table>
     <div>
       <input id="newChildId" placeholder="vd: branch-2">
-      <button onclick="approveChild()">Phê duyệt</button>
+      <button onclick="approveChild()">Phê duyệt thủ công</button>
     </div>
     <div id="allowListError"></div>
   </section>
@@ -83,6 +96,42 @@ async function loadStatus() {
     `;
   } catch (e) {
     el.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function loadPending() {
+  const body = document.getElementById('pendingBody');
+  const empty = document.getElementById('pendingEmpty');
+  const err = document.getElementById('pendingError');
+  body.innerHTML = '';
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/v1/admin/pending-children');
+    const pending = await r.json();
+    empty.style.display = (pending && pending.length) ? 'none' : 'block';
+    for (const p of (pending || [])) {
+      const tr = document.createElement('tr');
+      const escaped = p.node_id.replace(/'/g, "\\'");
+      tr.innerHTML = `<td>${p.node_id}</td><td>${p.last_reason || ''}</td><td><button onclick="approvePending('${escaped}')">Phê duyệt</button></td>`;
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function approvePending(nodeId) {
+  const err = document.getElementById('pendingError');
+  try {
+    const r = await fetch('/api/v1/admin/allowed-children', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node_id: nodeId }),
+    });
+    if (!r.ok) throw new Error('status ' + r.status);
+    await Promise.all([loadAllowList(), loadPending()]);
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
   }
 }
 
@@ -180,8 +229,10 @@ async function pushConfig() {
 }
 
 loadStatus();
+loadPending();
 loadAllowList();
 loadLogs();
+setInterval(loadPending, 3000);
 </script>
 </body>
 </html>

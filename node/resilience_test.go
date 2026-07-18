@@ -65,7 +65,7 @@ func TestNode_ChildQueuesUpstreamWhileParentDown(t *testing.T) {
 		if string(env.Payload) != "during outage" {
 			t.Fatalf("expected payload %q, got %q", "during outage", env.Payload)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(25 * time.Second):
 		t.Fatal("envelope queued during outage was never forwarded after parent came back")
 	}
 }

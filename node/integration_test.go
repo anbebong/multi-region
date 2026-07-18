@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,7 +80,7 @@ func TestNode_ThreeTierTopology_UpstreamAndDownstream(t *testing.T) {
 			received <- env
 		})
 
-		if err := root.SendDown(ctx, "config", []byte("cfg-v1")); err != nil {
+		if _, err := root.SendDown(ctx, "config", []byte("cfg-v1")); err != nil {
 			t.Fatalf("root.SendDown: %v", err)
 		}
 
@@ -91,4 +93,110 @@ func TestNode_ThreeTierTopology_UpstreamAndDownstream(t *testing.T) {
 			t.Fatal("leaf never received the downstream envelope pushed from root")
 		}
 	})
+}
+
+// TestNode_IntermediateNode_ConcurrentChildrenUpstream simulates the
+// scenario of an intermediate node (like TINH between TRUNG-UONG and many
+// XA) receiving upstream Envelopes from several children at the same time.
+// All of them share the intermediate node's single Client (one Upstream
+// connection to its own parent), so this exercises transport.Client.
+// SendUpstream's concurrency safety: every child's Envelope must arrive at
+// the root intact and exactly once, with no data races (run with -race) and
+// no envelope lost or corrupted by concurrent forwarding.
+func TestNode_IntermediateNode_ConcurrentChildrenUpstream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	root, err := New(WithID("root"), WithListenAddr("127.0.0.1:19553"))
+	if err != nil {
+		t.Fatalf("New root: %v", err)
+	}
+
+	var mu sync.Mutex
+	received := make(map[string]bool)
+	root.OnUpstream("log", func(ctx context.Context, env *proto.Envelope) {
+		mu.Lock()
+		received[string(env.Payload)] = true
+		mu.Unlock()
+	})
+
+	if err := root.Start(ctx); err != nil {
+		t.Fatalf("root.Start: %v", err)
+	}
+	defer root.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	intermediate, err := New(
+		WithID("intermediate"),
+		WithListenAddr("127.0.0.1:19554"),
+		WithResolver(resolver.NewStaticResolver("127.0.0.1:19553")),
+	)
+	if err != nil {
+		t.Fatalf("New intermediate: %v", err)
+	}
+	if err := intermediate.Start(ctx); err != nil {
+		t.Fatalf("intermediate.Start: %v", err)
+	}
+	defer intermediate.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	const numChildren = 20
+	const perChild = 10
+	children := make([]*Node, numChildren)
+	for i := range children {
+		child, err := New(
+			WithID(fmt.Sprintf("child-%d", i)),
+			WithResolver(resolver.NewStaticResolver("127.0.0.1:19554")),
+		)
+		if err != nil {
+			t.Fatalf("New child-%d: %v", i, err)
+		}
+		if err := child.Start(ctx); err != nil {
+			t.Fatalf("child-%d.Start: %v", i, err)
+		}
+		defer child.Stop()
+		children[i] = child
+	}
+	time.Sleep(200 * time.Millisecond) // let all children finish connecting
+
+	var wg sync.WaitGroup
+	for i, child := range children {
+		for j := 0; j < perChild; j++ {
+			wg.Add(1)
+			go func(childIdx, msgIdx int, c *Node) {
+				defer wg.Done()
+				payload := fmt.Sprintf("child-%d-msg-%d", childIdx, msgIdx)
+				if err := c.SendUp(ctx, "log", []byte(payload)); err != nil {
+					t.Errorf("child-%d SendUp msg %d: %v", childIdx, msgIdx, err)
+				}
+			}(i, j, child)
+		}
+	}
+	wg.Wait()
+
+	deadline := time.Now().Add(5 * time.Second)
+	want := numChildren * perChild
+	for {
+		mu.Lock()
+		got := len(received)
+		mu.Unlock()
+		if got == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("root received %d/%d envelopes before timeout", got, want)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 0; i < numChildren; i++ {
+		for j := 0; j < perChild; j++ {
+			payload := fmt.Sprintf("child-%d-msg-%d", i, j)
+			if !received[payload] {
+				t.Errorf("root never received %q", payload)
+			}
+		}
+	}
 }

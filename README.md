@@ -13,6 +13,7 @@ con, và truyền dữ liệu đáng tin cậy theo cả 2 chiều. Framework **
 ## Mục lục
 
 - [Ý tưởng cốt lõi](#ý-tưởng-cốt-lõi)
+- [Mô hình luồng hoạt động](#mô-hình-luồng-hoạt-động)
 - [Cấu trúc package](#cấu-trúc-package)
 - [Chạy thử nhanh (3 node, mTLS, phê duyệt)](#chạy-thử-nhanh-3-node-mtls-phê-duyệt)
 - [Tham chiếu file config JSON](#tham-chiếu-file-config-json)
@@ -64,6 +65,81 @@ Luồng dữ liệu:
 - **Phê duyệt con kết nối**: cha có thể cài hook `WithAuthorizeChild(...)`
   để chấp nhận/từ chối 1 con ngay khi nó cố kết nối, dựa trên `node-id` nó
   tự khai báo (xem [Phê duyệt con kết nối](#phê-duyệt-con-kết-nối)).
+- **Upstream và downstream chạy trên 2 kết nối gRPC hoàn toàn độc lập**
+  (`NodeService.Upstream` — client-streaming, `NodeService.Downstream` —
+  server-streaming), không phải chung 1 bidirectional stream. Mục đích:
+  nếu 1 chiều bị nghẽn (mạng chậm, cha xử lý chậm), chiều còn lại vẫn tiếp
+  tục bình thường — con vẫn gửi log lên được dù đang chờ 1 config lớn tải
+  xuống, và ngược lại. Đánh đổi: mỗi con cần 2 kết nối TCP/HTTP2 tới cha
+  thay vì 1.
+
+## Mô hình luồng hoạt động
+
+Cây ví dụ 3 tầng dùng xuyên suốt tài liệu này (TRUNG-UONG → TINH → XA — xem
+[Chạy thử nhanh](#chạy-thử-nhanh-3-node-mtls-phê-duyệt)):
+
+```mermaid
+graph TD
+    TW["TRUNG-UONG<br/>(gốc cây — chỉ WithListenAddr)"]
+    TINH["TINH<br/>(trung gian — WithListenAddr + WithResolver)"]
+    XA["XA<br/>(lá cây — chỉ WithResolver)"]
+    Agent["agent (PC)<br/>REST client"]
+    Web["Web/dashboard<br/>REST client"]
+
+    XA -- "Upstream: log" --> TINH
+    TINH -- "Upstream: log (forward)" --> TW
+    TW -- "Downstream: config" --> TINH
+    TINH -- "Downstream: config (broadcast)" --> XA
+    Agent -- "POST /api/v1/agent/logs" --> XA
+    Web -- "GET/POST /api/v1/admin/*" --> TW
+```
+
+Mỗi cạnh cha-con trong sơ đồ trên thực chất là **2 kết nối gRPC độc lập**
+(xem [Ý tưởng cốt lõi](#ý-tưởng-cốt-lõi)) — không phải 1 đường duy nhất.
+Chi tiết từng bước khi TINH khởi động và kết nối lên TRUNG-UONG:
+
+```mermaid
+sequenceDiagram
+    participant TINH as TINH (child)
+    participant TW as TRUNG-UONG (parent)
+
+    Note over TINH,TW: 1. TLS handshake (authenticate) — cả 2 phía<br/>trình chứng chỉ ký bởi cùng 1 CA
+    TINH->>TW: ClientHello + cert (CommonName=TINH)
+    TW->>TINH: ServerHello + cert (CommonName=TRUNG-UONG)
+    Note over TINH,TW: Sai CA → handshake thất bại ngay,<br/>không có code Go nào chạy tới AuthorizeChild
+
+    Note over TINH,TW: 2. Mở 2 RPC độc lập, mỗi cái tự gửi node-id qua metadata
+    TINH->>TW: rpc Upstream(stream) [metadata: node-id=TINH]
+    TW->>TW: AuthorizeChild(ctx, "TINH") — allow-list?
+    alt bị từ chối
+        TW--xTINH: reject, ghi vào PendingChildren
+        Note over TINH: reconnectLoop tự thử lại mỗi 10s
+    else được duyệt
+        TW-->>TINH: accept, đăng ký vào children
+    end
+    TINH->>TW: rpc Downstream(Ack) [metadata: node-id=TINH]
+    TW->>TW: AuthorizeChild(ctx, "TINH") — kiểm tra lại, độc lập với Upstream
+
+    Note over TINH,TW: 3. Truyền dữ liệu — 2 chiều không chờ nhau
+    TINH->>TW: Upstream: Envelope{kind:"log", payload:...}
+    TW->>TW: OnUpstream("log") handler chạy, rồi tự forward lên cha của TW (nếu có)
+    TW->>TINH: Downstream: Envelope{kind:"config", payload:...}
+    TINH->>TINH: OnDownstream("config") handler chạy, rồi tự broadcast xuống con của TINH
+```
+
+Vài điểm mấu chốt rút ra từ sơ đồ trên:
+
+- **CA xác thực (authenticate), CommonName định danh (identify)** — 2 việc
+  khác nhau, xảy ra ở 2 bước khác nhau. Cert ký sai CA bị chặn *trước khi*
+  `AuthorizeChild` chạy; cert đúng CA nhưng `node-id` không nằm trong
+  allow-list mới bị `AuthorizeChild` từ chối ở bước sau.
+- **Upstream và Downstream là 2 RPC tách biệt**, mỗi cái tự
+  `AuthorizeChild` riêng, tự sống/chết độc lập — mất Downstream không ảnh
+  hưởng khả năng gửi Upstream, và ngược lại.
+- **Framework chỉ làm tới bước 3** (di chuyển Envelope) — nó không biết
+  `"log"` hay `"config"` nghĩa là gì, không tự lưu trữ, không tự tổng hợp.
+  Mọi xử lý nội dung là việc của handler `OnUpstream`/`OnDownstream` mà
+  service tự đăng ký (xem `examples/node/main.go`).
 
 ## Cấu trúc package
 
@@ -71,9 +147,10 @@ Luồng dữ liệu:
 multi-region/
 ├── node/          # core framework: Node, Option, Start/Stop,
 │                  #   SendUp/SendDown/SendToChild, OnUpstream/OnDownstream
-├── transport/     # gRPC bidirectional stream server + client (mTLS),
-│                  #   theo dõi con bằng node-id, AuthorizeChild hook
-├── proto/         # định nghĩa protobuf: Envelope, StreamMessage
+├── transport/     # gRPC server + client (mTLS): 2 RPC độc lập
+│                  #   (Upstream client-streaming, Downstream server-
+│                  #   streaming), theo dõi con bằng node-id, AuthorizeChild
+├── proto/         # định nghĩa protobuf: Envelope, Ack, NodeService
 ├── resolver/       # tìm địa chỉ cha (mặc định: static config)
 ├── auth/           # mTLS Authenticator + helper sinh cert test
 └── examples/
@@ -209,6 +286,7 @@ REST API mà `http_addr` mở ra:
 | `GET /api/v1/admin/allowed-children` | Danh sách `node-id` đang được phép làm con |
 | `POST /api/v1/admin/allowed-children` | Phê duyệt thêm 1 `node-id` (`{"node_id": "..."}`) |
 | `DELETE /api/v1/admin/allowed-children/{node_id}` | Thu hồi phê duyệt |
+| `GET /api/v1/admin/pending-children` | Danh sách `node-id` đang cố kết nối nhưng bị từ chối (chưa được duyệt) |
 | `GET /` | Dashboard HTML — giao diện cho tất cả các endpoint trên |
 
 ## Phê duyệt con kết nối
@@ -241,6 +319,15 @@ n, err := node.New(
   kết nối lại mỗi vài giây (giống hệt cơ chế phục hồi sau mất mạng), nên
   ngay khi admin duyệt, con tự vào được mà **không cần restart tiến trình
   con**.
+- Framework tự ghi nhớ (trong bộ nhớ) `node-id` nào **vừa bị từ chối lần
+  đầu** — qua `Node.PendingChildren()` — để admin biết "ai đang gõ cửa xin
+  vào" thay vì phải tự đoán trước tên con sắp kết nối. Chỉ ghi lần từ chối
+  đầu tiên (không cập nhật lại mỗi lần con retry); mục biến mất ngay khi
+  `node-id` đó được duyệt và kết nối thành công.
+
+Dashboard của `examples/node` có mục **"Đang chờ duyệt"** hiển thị danh
+sách này (tự làm mới mỗi 3 giây) với nút "Phê duyệt" ngay trên từng dòng —
+không cần tự gõ lại tên con vào ô nhập.
 
 `examples/node` cài sẵn 1 chính sách cụ thể trong `examples/node/allowlist.go`
 (`childAllowList`): đối chiếu `node-id` con khai báo với 1 danh sách trong

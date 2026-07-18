@@ -145,13 +145,33 @@ func (n *Node) ChildrenCount() int {
 	return n.server.ChildrenCount()
 }
 
+// PendingChildren returns node-ids that tried to connect and were rejected
+// by WithAuthorizeChild, and have not connected successfully since. A
+// service uses this to show an admin "who's asking to connect" UI — the
+// framework itself does not decide what to do with a pending child, it only
+// remembers that one asked. Always empty for a node with no listen address
+// configured.
+func (n *Node) PendingChildren() []transport.PendingChild {
+	if n.server == nil {
+		return nil
+	}
+	return n.server.PendingChildren()
+}
+
 // SendDown pushes an Envelope of the given kind down to this node's
 // directly-connected children (each of which recursively forwards it
 // further down its own children). It is a no-op if this node has no
 // children currently connected.
-func (n *Node) SendDown(ctx context.Context, kind string, payload []byte) error {
+//
+// The returned *transport.BroadcastResult reports which children (by
+// node-id) the Envelope could not be delivered to because their send
+// buffer was full — the framework does not retry or decide what to do
+// about that on its own; a non-nil error means at least one child was
+// dropped, and the service decides whether/how to react (e.g. re-send,
+// alert, ignore).
+func (n *Node) SendDown(ctx context.Context, kind string, payload []byte) (*transport.BroadcastResult, error) {
 	if n.server == nil {
-		return nil
+		return &transport.BroadcastResult{}, nil
 	}
 	env := newEnvelope(n.cfg.id, kind, payload)
 	return n.server.BroadcastDownstream(env)
@@ -206,7 +226,9 @@ func (n *Node) handleDownstreamFromParent(env *proto.Envelope) {
 	log.Printf("[node %s] received downstream from parent: id=%s kind=%q", n.cfg.id, env.Id, env.Kind)
 	n.runDownstreamHandlers(env)
 	if n.server != nil {
-		_ = n.server.BroadcastDownstream(env)
+		if _, err := n.server.BroadcastDownstream(env); err != nil {
+			log.Printf("[node %s] re-broadcasting downstream id=%s to children: %v", n.cfg.id, env.Id, err)
+		}
 	}
 }
 
@@ -244,14 +266,25 @@ func (n *Node) forwardUp(ctx context.Context, env *proto.Envelope) error {
 	return nil
 }
 
+// retryPacingInterval is the minimum gap retryLoop leaves between
+// individual re-send attempts within a single retry pass. Without it, a
+// large backlog (e.g. thousands of envelopes queued during a long parent
+// outage) would be re-sent back-to-back in one tight loop, hitting the
+// parent with a burst instead of a steady trickle.
+const retryPacingInterval = 20 * time.Millisecond
+
 // retryLoop is the transport-level safety net for envelopes that could not
 // be forwarded upstream on the first attempt (e.g. the parent was
 // unreachable). It only re-attempts envelopes still sitting in the
 // in-memory pending queue — anything already delivered is removed from the
-// queue at send time, so this does not resend indefinitely.
+// queue at send time, so this does not resend indefinitely. Re-sends within
+// a pass are paced (see retryPacingInterval) so a large backlog is spread
+// out rather than fired at the parent all at once.
 func (n *Node) retryLoop(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	pacer := time.NewTicker(retryPacingInterval)
+	defer pacer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -265,6 +298,11 @@ func (n *Node) retryLoop(ctx context.Context) {
 			for _, env := range envs {
 				if err := n.client.SendUpstream(ctx, env); err != nil {
 					n.pending.push(env)
+				}
+				select {
+				case <-pacer.C:
+				case <-ctx.Done():
+					return
 				}
 			}
 		}

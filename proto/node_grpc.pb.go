@@ -19,14 +19,30 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeService_Stream_FullMethodName = "/node.NodeService/Stream"
+	NodeService_Upstream_FullMethodName   = "/node.NodeService/Upstream"
+	NodeService_Downstream_FullMethodName = "/node.NodeService/Downstream"
 )
 
 // NodeServiceClient is the client API for NodeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// NodeService exposes upstream and downstream as two independent RPCs
+// (rather than a single bidirectional stream carrying both directions) so
+// that a slow/blocked send in one direction can never stall delivery in the
+// other. A child opens both when it connects to a parent; each is its own
+// TCP/HTTP2 connection under the hood.
 type NodeServiceClient interface {
-	Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamMessage, StreamMessage], error)
+	// Upstream is a client-streaming RPC: the child keeps sending Envelopes as
+	// it produces them; the parent acks once when the child closes the
+	// stream. The child's claimed node-id travels as the "node-id" gRPC
+	// metadata header on the call, exactly as before.
+	Upstream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Envelope, Ack], error)
+	// Downstream is a server-streaming RPC: the child opens it once (empty
+	// request) and the parent pushes Envelopes down it for as long as the
+	// child stays connected. The child's claimed node-id also travels as the
+	// "node-id" gRPC metadata header on this call.
+	Downstream(ctx context.Context, in *Ack, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Envelope], error)
 }
 
 type nodeServiceClient struct {
@@ -37,24 +53,58 @@ func NewNodeServiceClient(cc grpc.ClientConnInterface) NodeServiceClient {
 	return &nodeServiceClient{cc}
 }
 
-func (c *nodeServiceClient) Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamMessage, StreamMessage], error) {
+func (c *nodeServiceClient) Upstream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Envelope, Ack], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &NodeService_ServiceDesc.Streams[0], NodeService_Stream_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &NodeService_ServiceDesc.Streams[0], NodeService_Upstream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamMessage, StreamMessage]{ClientStream: stream}
+	x := &grpc.GenericClientStream[Envelope, Ack]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NodeService_StreamClient = grpc.BidiStreamingClient[StreamMessage, StreamMessage]
+type NodeService_UpstreamClient = grpc.ClientStreamingClient[Envelope, Ack]
+
+func (c *nodeServiceClient) Downstream(ctx context.Context, in *Ack, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Envelope], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &NodeService_ServiceDesc.Streams[1], NodeService_Downstream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[Ack, Envelope]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NodeService_DownstreamClient = grpc.ServerStreamingClient[Envelope]
 
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
+//
+// NodeService exposes upstream and downstream as two independent RPCs
+// (rather than a single bidirectional stream carrying both directions) so
+// that a slow/blocked send in one direction can never stall delivery in the
+// other. A child opens both when it connects to a parent; each is its own
+// TCP/HTTP2 connection under the hood.
 type NodeServiceServer interface {
-	Stream(grpc.BidiStreamingServer[StreamMessage, StreamMessage]) error
+	// Upstream is a client-streaming RPC: the child keeps sending Envelopes as
+	// it produces them; the parent acks once when the child closes the
+	// stream. The child's claimed node-id travels as the "node-id" gRPC
+	// metadata header on the call, exactly as before.
+	Upstream(grpc.ClientStreamingServer[Envelope, Ack]) error
+	// Downstream is a server-streaming RPC: the child opens it once (empty
+	// request) and the parent pushes Envelopes down it for as long as the
+	// child stays connected. The child's claimed node-id also travels as the
+	// "node-id" gRPC metadata header on this call.
+	Downstream(*Ack, grpc.ServerStreamingServer[Envelope]) error
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -65,8 +115,11 @@ type NodeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeServiceServer struct{}
 
-func (UnimplementedNodeServiceServer) Stream(grpc.BidiStreamingServer[StreamMessage, StreamMessage]) error {
-	return status.Error(codes.Unimplemented, "method Stream not implemented")
+func (UnimplementedNodeServiceServer) Upstream(grpc.ClientStreamingServer[Envelope, Ack]) error {
+	return status.Error(codes.Unimplemented, "method Upstream not implemented")
+}
+func (UnimplementedNodeServiceServer) Downstream(*Ack, grpc.ServerStreamingServer[Envelope]) error {
+	return status.Error(codes.Unimplemented, "method Downstream not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -89,12 +142,23 @@ func RegisterNodeServiceServer(s grpc.ServiceRegistrar, srv NodeServiceServer) {
 	s.RegisterService(&NodeService_ServiceDesc, srv)
 }
 
-func _NodeService_Stream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(NodeServiceServer).Stream(&grpc.GenericServerStream[StreamMessage, StreamMessage]{ServerStream: stream})
+func _NodeService_Upstream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(NodeServiceServer).Upstream(&grpc.GenericServerStream[Envelope, Ack]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NodeService_StreamServer = grpc.BidiStreamingServer[StreamMessage, StreamMessage]
+type NodeService_UpstreamServer = grpc.ClientStreamingServer[Envelope, Ack]
+
+func _NodeService_Downstream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(Ack)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(NodeServiceServer).Downstream(m, &grpc.GenericServerStream[Ack, Envelope]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type NodeService_DownstreamServer = grpc.ServerStreamingServer[Envelope]
 
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -105,10 +169,14 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Stream",
-			Handler:       _NodeService_Stream_Handler,
-			ServerStreams: true,
+			StreamName:    "Upstream",
+			Handler:       _NodeService_Upstream_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "Downstream",
+			Handler:       _NodeService_Downstream_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "proto/node.proto",

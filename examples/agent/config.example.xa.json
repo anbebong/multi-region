@@ -1,0 +1,5 @@
+{
+  "service_addr": "http://127.0.0.1:8082",
+  "interval_seconds": 5,
+  "payload": "hello from agent XA"
+}

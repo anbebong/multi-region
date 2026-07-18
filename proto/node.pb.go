@@ -94,36 +94,26 @@ func (x *Envelope) GetTimestamp() int64 {
 	return 0
 }
 
-// StreamMessage carries an Envelope in exactly one direction on the shared
-// bidirectional stream: upstream (child -> parent) or downstream
-// (parent -> child). The framework forwards each direction recursively
-// (upstream keeps going up if this node itself has a parent; downstream
-// keeps going down to this node's own children) without inspecting kind.
-type StreamMessage struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Direction:
-	//
-	//	*StreamMessage_Upstream
-	//	*StreamMessage_Downstream
-	Direction     isStreamMessage_Direction `protobuf_oneof:"direction"`
+type Ack struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *StreamMessage) Reset() {
-	*x = StreamMessage{}
+func (x *Ack) Reset() {
+	*x = Ack{}
 	mi := &file_proto_node_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *StreamMessage) String() string {
+func (x *Ack) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*StreamMessage) ProtoMessage() {}
+func (*Ack) ProtoMessage() {}
 
-func (x *StreamMessage) ProtoReflect() protoreflect.Message {
+func (x *Ack) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_node_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -135,51 +125,10 @@ func (x *StreamMessage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use StreamMessage.ProtoReflect.Descriptor instead.
-func (*StreamMessage) Descriptor() ([]byte, []int) {
+// Deprecated: Use Ack.ProtoReflect.Descriptor instead.
+func (*Ack) Descriptor() ([]byte, []int) {
 	return file_proto_node_proto_rawDescGZIP(), []int{1}
 }
-
-func (x *StreamMessage) GetDirection() isStreamMessage_Direction {
-	if x != nil {
-		return x.Direction
-	}
-	return nil
-}
-
-func (x *StreamMessage) GetUpstream() *Envelope {
-	if x != nil {
-		if x, ok := x.Direction.(*StreamMessage_Upstream); ok {
-			return x.Upstream
-		}
-	}
-	return nil
-}
-
-func (x *StreamMessage) GetDownstream() *Envelope {
-	if x != nil {
-		if x, ok := x.Direction.(*StreamMessage_Downstream); ok {
-			return x.Downstream
-		}
-	}
-	return nil
-}
-
-type isStreamMessage_Direction interface {
-	isStreamMessage_Direction()
-}
-
-type StreamMessage_Upstream struct {
-	Upstream *Envelope `protobuf:"bytes,1,opt,name=upstream,proto3,oneof"`
-}
-
-type StreamMessage_Downstream struct {
-	Downstream *Envelope `protobuf:"bytes,2,opt,name=downstream,proto3,oneof"`
-}
-
-func (*StreamMessage_Upstream) isStreamMessage_Direction() {}
-
-func (*StreamMessage_Downstream) isStreamMessage_Direction() {}
 
 var File_proto_node_proto protoreflect.FileDescriptor
 
@@ -190,15 +139,12 @@ const file_proto_node_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"|\n" +
-	"\rStreamMessage\x12,\n" +
-	"\bupstream\x18\x01 \x01(\v2\x0e.node.EnvelopeH\x00R\bupstream\x120\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"\x05\n" +
+	"\x03Ack2a\n" +
+	"\vNodeService\x12'\n" +
+	"\bUpstream\x12\x0e.node.Envelope\x1a\t.node.Ack(\x01\x12)\n" +
 	"\n" +
-	"downstream\x18\x02 \x01(\v2\x0e.node.EnvelopeH\x00R\n" +
-	"downstreamB\v\n" +
-	"\tdirection2E\n" +
-	"\vNodeService\x126\n" +
-	"\x06Stream\x12\x13.node.StreamMessage\x1a\x13.node.StreamMessage(\x010\x01B(Z&github.com/anbebong/multi-region/protob\x06proto3"
+	"Downstream\x12\t.node.Ack\x1a\x0e.node.Envelope0\x01B(Z&github.com/anbebong/multi-region/protob\x06proto3"
 
 var (
 	file_proto_node_proto_rawDescOnce sync.Once
@@ -214,29 +160,25 @@ func file_proto_node_proto_rawDescGZIP() []byte {
 
 var file_proto_node_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_proto_node_proto_goTypes = []any{
-	(*Envelope)(nil),      // 0: node.Envelope
-	(*StreamMessage)(nil), // 1: node.StreamMessage
+	(*Envelope)(nil), // 0: node.Envelope
+	(*Ack)(nil),      // 1: node.Ack
 }
 var file_proto_node_proto_depIdxs = []int32{
-	0, // 0: node.StreamMessage.upstream:type_name -> node.Envelope
-	0, // 1: node.StreamMessage.downstream:type_name -> node.Envelope
-	1, // 2: node.NodeService.Stream:input_type -> node.StreamMessage
-	1, // 3: node.NodeService.Stream:output_type -> node.StreamMessage
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 0: node.NodeService.Upstream:input_type -> node.Envelope
+	1, // 1: node.NodeService.Downstream:input_type -> node.Ack
+	1, // 2: node.NodeService.Upstream:output_type -> node.Ack
+	0, // 3: node.NodeService.Downstream:output_type -> node.Envelope
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_proto_node_proto_init() }
 func file_proto_node_proto_init() {
 	if File_proto_node_proto != nil {
 		return
-	}
-	file_proto_node_proto_msgTypes[1].OneofWrappers = []any{
-		(*StreamMessage_Upstream)(nil),
-		(*StreamMessage_Downstream)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

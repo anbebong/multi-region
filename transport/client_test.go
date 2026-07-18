@@ -59,7 +59,7 @@ func TestClient_SendUpstreamAndReceiveDownstream(t *testing.T) {
 		t.Fatal("timed out waiting for server to receive upstream envelope")
 	}
 
-	if err := srv.BroadcastDownstream(&proto.Envelope{Id: "2", Kind: "config", Payload: []byte("v1")}); err != nil {
+	if _, err := srv.BroadcastDownstream(&proto.Envelope{Id: "2", Kind: "config", Payload: []byte("v1")}); err != nil {
 		t.Fatalf("BroadcastDownstream: %v", err)
 	}
 
