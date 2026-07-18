@@ -9,19 +9,19 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type fixedResolver struct{ addr string }
 
 func (f fixedResolver) ParentAddr() (string, error) { return f.addr, nil }
 
-func TestClient_SendLogAndReceiveConfig(t *testing.T) {
+func TestClient_SendUpstreamAndReceiveDownstream(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 
-	receivedLog := make(chan *proto.LogEntry, 1)
-	srv := NewServer(nil, func(ctx context.Context, entry *proto.LogEntry) error {
-		receivedLog <- entry
+	receivedUp := make(chan *proto.Envelope, 1)
+	srv := NewServer(nil, func(ctx context.Context, env *proto.Envelope) error {
+		receivedUp <- env
 		return nil
 	})
 	grpcServer := grpc.NewServer()
@@ -33,9 +33,9 @@ func TestClient_SendLogAndReceiveConfig(t *testing.T) {
 		return lis.DialContext(ctx)
 	}
 
-	receivedCfg := make(chan *proto.ConfigPayload, 1)
-	client := NewClient(fixedResolver{addr: "bufnet"}, nil, func(cfg *proto.ConfigPayload) {
-		receivedCfg <- cfg
+	receivedDown := make(chan *proto.Envelope, 1)
+	client := NewClient(fixedResolver{addr: "bufnet"}, nil, func(env *proto.Envelope) {
+		receivedDown <- env
 	})
 	client.dialer = dialer
 
@@ -46,29 +46,29 @@ func TestClient_SendLogAndReceiveConfig(t *testing.T) {
 	}
 	defer client.Close()
 
-	if err := client.SendLog(ctx, &proto.LogEntry{Id: "1", NodeId: "child-a", Timestamp: 1}); err != nil {
-		t.Fatalf("SendLog: %v", err)
+	if err := client.SendUpstream(ctx, &proto.Envelope{Id: "1", Kind: "log", Timestamp: 1}); err != nil {
+		t.Fatalf("SendUpstream: %v", err)
 	}
 
 	select {
-	case entry := <-receivedLog:
-		if entry.Id != "1" {
-			t.Fatalf("unexpected entry: %+v", entry)
+	case env := <-receivedUp:
+		if env.Id != "1" {
+			t.Fatalf("unexpected envelope: %+v", env)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for server to receive log")
+		t.Fatal("timed out waiting for server to receive upstream envelope")
 	}
 
-	if err := srv.Broadcast(&proto.ConfigPayload{Version: "v1"}); err != nil {
-		t.Fatalf("Broadcast: %v", err)
+	if err := srv.BroadcastDownstream(&proto.Envelope{Id: "2", Kind: "config", Payload: []byte("v1")}); err != nil {
+		t.Fatalf("BroadcastDownstream: %v", err)
 	}
 
 	select {
-	case cfg := <-receivedCfg:
-		if cfg.Version != "v1" {
-			t.Fatalf("unexpected config: %+v", cfg)
+	case env := <-receivedDown:
+		if string(env.Payload) != "v1" {
+			t.Fatalf("unexpected envelope: %+v", env)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for client to receive config")
+		t.Fatal("timed out waiting for client to receive downstream envelope")
 	}
 }

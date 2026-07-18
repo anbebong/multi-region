@@ -5,18 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/resolver"
-	"github.com/lancsnet/multi-region/storage"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/resolver"
 )
 
-func TestNode_ThreeTierTopology_LogUpConfigDown(t *testing.T) {
+func TestNode_ThreeTierTopology_UpstreamAndDownstream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Tier 1: Trung tam (root, server only)
-	rootDB := storage.MustNewBoltStorage(t)
-	root, err := New(WithID("root"), WithListenAddr("127.0.0.1:19543"), WithStorage(rootDB))
+	root, err := New(WithID("root"), WithListenAddr("127.0.0.1:19543"))
 	if err != nil {
 		t.Fatalf("New root: %v", err)
 	}
@@ -27,12 +25,10 @@ func TestNode_ThreeTierTopology_LogUpConfigDown(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Tier 2: Chi nhanh (server + client)
-	branchDB := storage.MustNewBoltStorage(t)
 	branch, err := New(
 		WithID("branch"),
 		WithListenAddr("127.0.0.1:19544"),
 		WithResolver(resolver.NewStaticResolver("127.0.0.1:19543")),
-		WithStorage(branchDB),
 	)
 	if err != nil {
 		t.Fatalf("New branch: %v", err)
@@ -44,11 +40,9 @@ func TestNode_ThreeTierTopology_LogUpConfigDown(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Tier 3: Leaf (client only)
-	leafDB := storage.MustNewBoltStorage(t)
 	leaf, err := New(
 		WithID("leaf"),
 		WithResolver(resolver.NewStaticResolver("127.0.0.1:19544")),
-		WithStorage(leafDB),
 	)
 	if err != nil {
 		t.Fatalf("New leaf: %v", err)
@@ -58,40 +52,43 @@ func TestNode_ThreeTierTopology_LogUpConfigDown(t *testing.T) {
 	}
 	defer leaf.Stop()
 
-	t.Run("log flows from leaf up to root", func(t *testing.T) {
-		entry := &proto.LogEntry{Id: "leaf-log-1", NodeId: "leaf", Timestamp: 1, Payload: []byte("from leaf")}
-		if err := leaf.Ingest(ctx, entry); err != nil {
-			t.Fatalf("leaf.Ingest: %v", err)
-		}
-
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			got, _ := rootDB.Query(ctx, storage.QueryFilter{NodeID: "leaf"})
-			if len(got) == 1 && got[0].Id == "leaf-log-1" {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		t.Fatal("root never received leaf's log entry")
-	})
-
-	t.Run("config flows from root down to leaf", func(t *testing.T) {
-		var leafReceived *proto.ConfigPayload
-		leaf.distributor.OnConfigUpdate(func(cfg *proto.ConfigPayload) {
-			leafReceived = cfg
+	t.Run("upstream envelope flows from leaf up to root", func(t *testing.T) {
+		received := make(chan *proto.Envelope, 1)
+		root.OnUpstream("log", func(ctx context.Context, env *proto.Envelope) {
+			received <- env
 		})
 
-		if err := root.distributor.Distribute(ctx, &proto.ConfigPayload{Version: "cfg-v1"}); err != nil {
-			t.Fatalf("root distribute: %v", err)
+		if err := leaf.SendUp(ctx, "log", []byte("from leaf")); err != nil {
+			t.Fatalf("leaf.SendUp: %v", err)
 		}
 
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			if leafReceived != nil && leafReceived.Version == "cfg-v1" {
-				return
+		select {
+		case env := <-received:
+			if string(env.Payload) != "from leaf" {
+				t.Fatalf("expected payload %q, got %q", "from leaf", env.Payload)
 			}
-			time.Sleep(50 * time.Millisecond)
+		case <-time.After(3 * time.Second):
+			t.Fatal("root never received leaf's upstream envelope")
 		}
-		t.Fatal("leaf never received the config pushed from root")
+	})
+
+	t.Run("downstream envelope flows from root down to leaf", func(t *testing.T) {
+		received := make(chan *proto.Envelope, 1)
+		leaf.OnDownstream("config", func(env *proto.Envelope) {
+			received <- env
+		})
+
+		if err := root.SendDown(ctx, "config", []byte("cfg-v1")); err != nil {
+			t.Fatalf("root.SendDown: %v", err)
+		}
+
+		select {
+		case env := <-received:
+			if string(env.Payload) != "cfg-v1" {
+				t.Fatalf("expected payload %q, got %q", "cfg-v1", env.Payload)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("leaf never received the downstream envelope pushed from root")
+		}
 	})
 }

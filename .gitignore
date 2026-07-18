@@ -1,7 +1,7 @@
 # Build output
 /bin/
 
-# BoltDB data files created when running cmd/node locally
+# BoltDB data files created when running examples/node locally
 *.db
 
 # Local run logs

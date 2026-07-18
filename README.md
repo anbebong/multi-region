@@ -11,7 +11,7 @@ không có khái niệm "role" cố định, khả năng của node hoàn toàn 
 - [Ý tưởng cốt lõi](#ý-tưởng-cốt-lõi)
 - [Cấu trúc package](#cấu-trúc-package)
 - [Cài đặt & build](#cài-đặt--build)
-- [Chạy thử nhanh với binary `cmd/node`](#chạy-thử-nhanh-với-binary-cmdnode)
+- [Chạy thử nhanh với binary `examples/node`](#chạy-thử-nhanh-với-binary-examplesnode)
 - [Tham chiếu file config JSON](#tham-chiếu-file-config-json)
 - [Dùng như thư viện Go trong code của bạn](#dùng-như-thư-viện-go-trong-code-của-bạn)
 - [Bật mTLS](#bật-mtls)
@@ -54,8 +54,8 @@ multi-region/
 ├── configmgr/       # phân phối config xuống cây con
 ├── resolver/        # tìm địa chỉ cha (mặc định: static config)
 ├── auth/           # mTLS Authenticator + helper sinh cert test
-└── cmd/
-    ├── node/       # binary tham khảo: đọc file JSON, chạy 1 node thật
+└── examples/
+    ├── node/       # binary ví dụ: đọc file JSON, chạy 1 node thật với REST API
     └── checkdb/    # tool nhỏ để đọc thử 1 file BoltDB (debug/kiểm tra)
 ```
 
@@ -66,21 +66,21 @@ nếu bạn cần sửa `proto/node.proto`.
 
 ```bash
 go build ./...              # build toàn bộ package + binary
-go build -o bin/node.exe ./cmd/node   # build riêng binary chạy thử (Windows)
+go build -o bin/node.exe ./examples/node   # build riêng binary chạy thử (Windows)
 ```
 
-## Chạy thử nhanh với binary `cmd/node`
+## Chạy thử nhanh với binary `examples/node`
 
 Ví dụ dựng 2 node độc lập: 1 Trung tâm (`root`) + 1 Chi nhánh (`branch-1`)
 nối lên `root`. Đã có sẵn 2 file mẫu:
 
-- `cmd/node/config.example.root.json`
-- `cmd/node/config.example.branch.json`
+- `examples/node/config.example.root.json`
+- `examples/node/config.example.branch.json`
 
 **Bước 1 — build binary:**
 
 ```bash
-go build -o bin/node.exe ./cmd/node
+go build -o bin/node.exe ./examples/node
 ```
 
 **Bước 2 — chạy 2 tiến trình ĐỘC LẬP** (mở 2 cửa sổ terminal khác nhau,
@@ -88,12 +88,12 @@ không chạy chung 1 shell bằng `&` để tránh nhầm lẫn tiến trình):
 
 Terminal 1 (Trung tâm):
 ```powershell
-.\bin\node.exe .\cmd\node\config.example.root.json
+.\bin\node.exe .\examples\node\config.example.root.json
 ```
 
 Terminal 2 (Chi nhánh):
 ```powershell
-.\bin\node.exe .\cmd\node\config.example.branch.json
+.\bin\node.exe .\examples\node\config.example.branch.json
 ```
 
 Log khởi động sẽ in ra dạng:
@@ -106,7 +106,7 @@ node "branch-1" started (listen="127.0.0.1:9444" parent="127.0.0.1:9443")
 `http_addr` để nhận log test qua HTTP, không cần viết code Go):
 
 ```bash
-curl -X POST http://127.0.0.1:8081/ingest -d '{"payload":"hello from branch"}'
+curl -X POST http://127.0.0.1:8081/api/v1/agent/logs -d '{"payload":"hello from branch"}'
 ```
 
 **Bước 4 — xác nhận log đã trôi lên Trung tâm.** Dừng cả 2 tiến trình
@@ -114,7 +114,7 @@ curl -X POST http://127.0.0.1:8081/ingest -d '{"payload":"hello from branch"}'
 bằng tool `checkdb`:
 
 ```bash
-go run ./cmd/checkdb root.db
+go run ./examples/checkdb root.db
 # id=branch-1-...  node=branch-1  payload=hello from branch
 # total=1
 ```
@@ -126,7 +126,7 @@ rồi lên tới Trung tâm.
 
 ## Tham chiếu file config JSON
 
-File config của binary `cmd/node` (xem `cmd/node/config.go`):
+File config của binary `examples/node` (xem `examples/node/config.go`):
 
 | Trường | Bắt buộc? | Ý nghĩa |
 |---|---|---|
@@ -134,7 +134,7 @@ File config của binary `cmd/node` (xem `cmd/node/config.go`):
 | `listen_addr` | Ít nhất 1 trong 2 với `parent_addr` | Địa chỉ TCP node lắng nghe con (vd `"127.0.0.1:9443"`). Có → node nhận log/phân phối config xuống con. |
 | `parent_addr` | Ít nhất 1 trong 2 với `listen_addr` | Địa chỉ TCP của node cha. Có → node tự kết nối lên cha khi start. |
 | `storage_path` | Có | Đường dẫn file BoltDB lưu log local của node này. |
-| `http_addr` | Không | Nếu set, mở thêm 1 HTTP server nội bộ với `POST /ingest {"payload": "..."}` — chỉ để test tay, không phải giao thức chính thức giữa các node. |
+| `http_addr` | Không | Nếu set, mở thêm 1 HTTP server nội bộ với REST API: `POST /api/v1/agent/logs` (agent gửi log), `POST /api/v1/admin/config` (đẩy config xuống cây con), `GET /api/v1/admin/logs`, `GET /api/v1/admin/status`, `GET /api/v1/admin/children` (quản trị node này). |
 | `tls` | Không | Bật mTLS thật (xem phần dưới). Bỏ trống thì chạy gRPC insecure — **chỉ dùng để thử nghiệm local, không dùng khi triển khai thật.** |
 
 Ví dụ đầy đủ (có mTLS):
@@ -155,7 +155,7 @@ Ví dụ đầy đủ (có mTLS):
 
 ## Dùng như thư viện Go trong code của bạn
 
-`cmd/node` chỉ là 1 chương trình tham khảo minh họa cách gọi thư viện — bạn
+`examples/node` chỉ là 1 chương trình tham khảo minh họa cách gọi thư viện — bạn
 có thể import trực tiếp các package và tự viết logic riêng:
 
 ```go
@@ -163,11 +163,11 @@ import (
     "context"
     "time"
 
-    "github.com/lancsnet/multi-region/auth"
-    "github.com/lancsnet/multi-region/node"
-    "github.com/lancsnet/multi-region/proto"
-    "github.com/lancsnet/multi-region/resolver"
-    "github.com/lancsnet/multi-region/storage"
+    "github.com/anbebong/multi-region/auth"
+    "github.com/anbebong/multi-region/node"
+    "github.com/anbebong/multi-region/proto"
+    "github.com/anbebong/multi-region/resolver"
+    "github.com/anbebong/multi-region/storage"
 )
 
 func main() {
@@ -217,7 +217,7 @@ tạo cert, **không dùng file đó cho production**. Khi triển khai thật, 
 CA/cert bằng công cụ PKI nội bộ của bạn (Vault, cfssl, openssl...) rồi trỏ
 `tls` trong config JSON tới các file đó.
 
-Nếu bỏ trống `tls`, `cmd/node` sẽ in cảnh báo và chạy gRPC không mã hóa —
+Nếu bỏ trống `tls`, `examples/node` sẽ in cảnh báo và chạy gRPC không mã hóa —
 chỉ nên dùng khi thử nghiệm trên máy local.
 
 ## Chạy test
@@ -251,7 +251,7 @@ make proto
   vô dụng (không nhận ai, không gửi cho ai) không được phép khởi tạo.
 - **BoltDB báo "timeout" khi mở file đang chạy**: file `.db` đang bị khóa
   bởi 1 tiến trình `node.exe` khác đang chạy trên cùng file đó (bbolt dùng
-  file lock độc quyền). Dừng tiến trình đó trước khi dùng `cmd/checkdb`
+  file lock độc quyền). Dừng tiến trình đó trước khi dùng `examples/checkdb`
   hoặc mở lại bằng process khác.
 - **Log không thấy trôi lên cha khi test tay**: kiểm tra `flushLoop` chạy
   mỗi 2 giây — đợi vài giây rồi kiểm tra lại; nếu vẫn không thấy, kiểm tra

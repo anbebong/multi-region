@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Module path: `github.com/lancsnet/multi-region` (adjust if the user has a different org/repo name — confirm before Task 1 if unsure).
+- Module path: `github.com/anbebong/multi-region` (adjust if the user has a different org/repo name — confirm before Task 1 if unsure).
 - Go version: 1.22+ (per spec's Go framework requirement).
 - All cross-node communication uses gRPC bidirectional streaming per spec section 2 ("Giao thuc").
 - All connections use mTLS per spec section 2 ("Xac thuc") — no unauthenticated transport path.
@@ -37,9 +37,9 @@
 Run:
 ```bash
 cd "E:/git-hub/multi-region"
-go mod init github.com/lancsnet/multi-region
+go mod init github.com/anbebong/multi-region
 ```
-Expected: creates `go.mod` with `module github.com/lancsnet/multi-region` and a `go 1.22` (or later) directive.
+Expected: creates `go.mod` with `module github.com/anbebong/multi-region` and a `go 1.22` (or later) directive.
 
 - [ ] **Step 2: Write the protobuf schema**
 
@@ -49,7 +49,7 @@ syntax = "proto3";
 
 package node;
 
-option go_package = "github.com/lancsnet/multi-region/proto";
+option go_package = "github.com/anbebong/multi-region/proto";
 
 message LogEntry {
   string id = 1;
@@ -134,7 +134,7 @@ package storage
 import (
 	"context"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type QueryFilter struct {
@@ -168,7 +168,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 func TestBoltStorage_SaveAndQuery(t *testing.T) {
@@ -238,7 +238,7 @@ import (
 	"go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 
-	nodepb "github.com/lancsnet/multi-region/proto"
+	nodepb "github.com/anbebong/multi-region/proto"
 )
 
 var bucketName = []byte("logs")
@@ -667,7 +667,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 func dialBufconn(t *testing.T, lis *bufconn.Listener) *grpc.ClientConn {
@@ -746,8 +746,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/lancsnet/multi-region/auth"
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/auth"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type LogHandler func(ctx context.Context, entry *proto.LogEntry) error
@@ -926,7 +926,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type fixedResolver struct{ addr string }
@@ -1012,8 +1012,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/resolver"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/resolver"
 )
 
 type ConfigHandler func(cfg *proto.ConfigPayload)
@@ -1165,7 +1165,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type fakeSender struct {
@@ -1224,7 +1224,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type LogSender interface {
@@ -1315,7 +1315,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type fakeBroadcaster struct {
@@ -1370,7 +1370,7 @@ package configmgr
 import (
 	"context"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 type Broadcaster interface {
@@ -1467,9 +1467,9 @@ Create `node/options.go`:
 package node
 
 import (
-	"github.com/lancsnet/multi-region/auth"
-	"github.com/lancsnet/multi-region/resolver"
-	"github.com/lancsnet/multi-region/storage"
+	"github.com/anbebong/multi-region/auth"
+	"github.com/anbebong/multi-region/resolver"
+	"github.com/anbebong/multi-region/storage"
 )
 
 type Role int
@@ -1527,9 +1527,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/resolver"
-	"github.com/lancsnet/multi-region/storage"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/resolver"
+	"github.com/anbebong/multi-region/storage"
 )
 
 func TestNode_ChildForwardsLogToParent(t *testing.T) {
@@ -1625,11 +1625,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lancsnet/multi-region/configmgr"
-	"github.com/lancsnet/multi-region/forwarder"
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/storage"
-	"github.com/lancsnet/multi-region/transport"
+	"github.com/anbebong/multi-region/configmgr"
+	"github.com/anbebong/multi-region/forwarder"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/storage"
+	"github.com/anbebong/multi-region/transport"
 )
 
 type Node struct {
@@ -1761,10 +1761,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lancsnet/multi-region/configmgr"
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/resolver"
-	"github.com/lancsnet/multi-region/storage"
+	"github.com/anbebong/multi-region/configmgr"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/resolver"
+	"github.com/anbebong/multi-region/storage"
 )
 
 func TestNode_ThreeTierTopology_LogUpConfigDown(t *testing.T) {
@@ -1926,9 +1926,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lancsnet/multi-region/proto"
-	"github.com/lancsnet/multi-region/resolver"
-	"github.com/lancsnet/multi-region/storage"
+	"github.com/anbebong/multi-region/proto"
+	"github.com/anbebong/multi-region/resolver"
+	"github.com/anbebong/multi-region/storage"
 )
 
 func TestNode_ChildBuffersLogsWhileParentDown(t *testing.T) {

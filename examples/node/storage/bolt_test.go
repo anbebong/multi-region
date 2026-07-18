@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 func TestBoltStorage_SaveAndQuery(t *testing.T) {
@@ -17,12 +17,12 @@ func TestBoltStorage_SaveAndQuery(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	entry := &proto.LogEntry{Id: "1", NodeId: "node-a", Timestamp: 100, Payload: []byte("hello")}
-	if err := s.Save(ctx, entry); err != nil {
+	env := &proto.Envelope{Id: "1", Kind: "log", Timestamp: 100, Payload: []byte("hello")}
+	if err := s.Save(ctx, env); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	got, err := s.Query(ctx, QueryFilter{NodeID: "node-a"})
+	got, err := s.Query(ctx, QueryFilter{Kind: "log"})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -40,14 +40,14 @@ func TestBoltStorage_Delete(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	entry := &proto.LogEntry{Id: "1", NodeId: "node-a", Timestamp: 100, Payload: []byte("hello")}
-	if err := s.Save(ctx, entry); err != nil {
+	env := &proto.Envelope{Id: "1", Kind: "log", Timestamp: 100, Payload: []byte("hello")}
+	if err := s.Save(ctx, env); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if err := s.Delete(ctx, []string{"1"}); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	got, err := s.Query(ctx, QueryFilter{NodeID: "node-a"})
+	got, err := s.Query(ctx, QueryFilter{Kind: "log"})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

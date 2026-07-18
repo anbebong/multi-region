@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/lancsnet/multi-region/proto"
+	"github.com/anbebong/multi-region/proto"
 )
 
 func dialBufconn(t *testing.T, lis *bufconn.Listener) *grpc.ClientConn {
@@ -27,12 +27,12 @@ func dialBufconn(t *testing.T, lis *bufconn.Listener) *grpc.ClientConn {
 	return conn
 }
 
-func TestServer_ReceivesLogEntry(t *testing.T) {
+func TestServer_ReceivesUpstreamEnvelope(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
-	received := make(chan *proto.LogEntry, 1)
+	received := make(chan *proto.Envelope, 1)
 
-	srv := NewServer(nil, func(ctx context.Context, entry *proto.LogEntry) error {
-		received <- entry
+	srv := NewServer(nil, func(ctx context.Context, env *proto.Envelope) error {
+		received <- env
 		return nil
 	})
 	grpcServer := grpc.NewServer()
@@ -49,18 +49,18 @@ func TestServer_ReceivesLogEntry(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 	err = stream.Send(&proto.StreamMessage{
-		Body: &proto.StreamMessage_Log{Log: &proto.LogEntry{Id: "1", NodeId: "child-a", Timestamp: 1, Payload: []byte("hi")}},
+		Direction: &proto.StreamMessage_Upstream{Upstream: &proto.Envelope{Id: "1", Kind: "log", Timestamp: 1, Payload: []byte("hi")}},
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
 	select {
-	case entry := <-received:
-		if entry.Id != "1" || entry.NodeId != "child-a" {
-			t.Fatalf("unexpected entry: %+v", entry)
+	case env := <-received:
+		if env.Id != "1" || env.Kind != "log" {
+			t.Fatalf("unexpected envelope: %+v", env)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for log entry on server")
+		t.Fatal("timed out waiting for upstream envelope on server")
 	}
 }

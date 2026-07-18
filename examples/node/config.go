@@ -7,10 +7,10 @@ import (
 )
 
 // FileConfig is the on-disk JSON shape for running a node.Node as a
-// standalone process. It exists only in cmd/node — it is not part of the
+// standalone process. It exists only in examples/node — it is not part of the
 // library's public API.
 type FileConfig struct {
-	// ID is this node's identifier, used as NodeId on ingested log entries.
+	// ID is this node's identifier.
 	ID string `json:"id"`
 
 	// ListenAddr, if set, makes this node accept connections from children
@@ -27,11 +27,15 @@ type FileConfig struct {
 	// capability follows directly from which addresses are configured.
 	ParentAddr string `json:"parent_addr,omitempty"`
 
-	// StoragePath is the BoltDB file path for this node's local log storage.
+	// StoragePath is the BoltDB file path for this service's own local
+	// record of log/config Envelopes (see examples/node/storage) — this is
+	// this service's own persistence choice, not something the framework
+	// requires or knows about.
 	StoragePath string `json:"storage_path"`
 
-	// HTTPAddr, if set, starts a local HTTP server exposing POST /ingest so
-	// you can feed log entries into this node for manual testing.
+	// HTTPAddr, if set, starts a local HTTP server exposing api/v1/agent/...
+	// (for agents reporting logs), api/v1/admin/... (for administering this
+	// node), and a small HTML dashboard at "/" that calls the admin API.
 	HTTPAddr string `json:"http_addr,omitempty"`
 
 	// TLS is optional; when omitted the node runs with insecure gRPC

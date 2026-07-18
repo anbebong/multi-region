@@ -7,10 +7,10 @@ import (
 	"go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 
-	nodepb "github.com/lancsnet/multi-region/proto"
+	nodepb "github.com/anbebong/multi-region/proto"
 )
 
-var bucketName = []byte("logs")
+var bucketName = []byte("envelopes")
 
 type BoltStorage struct {
 	db *bbolt.DB
@@ -31,31 +31,31 @@ func NewBoltStorage(path string) (*BoltStorage, error) {
 	return &BoltStorage{db: db}, nil
 }
 
-func (s *BoltStorage) Save(ctx context.Context, entry *nodepb.LogEntry) error {
-	data, err := proto.Marshal(entry)
+func (s *BoltStorage) Save(ctx context.Context, env *nodepb.Envelope) error {
+	data, err := proto.Marshal(env)
 	if err != nil {
-		return fmt.Errorf("marshal entry: %w", err)
+		return fmt.Errorf("marshal envelope: %w", err)
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(bucketName).Put([]byte(entry.Id), data)
+		return tx.Bucket(bucketName).Put([]byte(env.Id), data)
 	})
 }
 
-func (s *BoltStorage) Query(ctx context.Context, filter QueryFilter) ([]*nodepb.LogEntry, error) {
-	var results []*nodepb.LogEntry
+func (s *BoltStorage) Query(ctx context.Context, filter QueryFilter) ([]*nodepb.Envelope, error) {
+	var results []*nodepb.Envelope
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketName).ForEach(func(k, v []byte) error {
-			entry := &nodepb.LogEntry{}
-			if err := proto.Unmarshal(v, entry); err != nil {
-				return fmt.Errorf("unmarshal entry: %w", err)
+			env := &nodepb.Envelope{}
+			if err := proto.Unmarshal(v, env); err != nil {
+				return fmt.Errorf("unmarshal envelope: %w", err)
 			}
-			if filter.NodeID != "" && entry.NodeId != filter.NodeID {
+			if filter.Kind != "" && env.Kind != filter.Kind {
 				return nil
 			}
-			if filter.Since != 0 && entry.Timestamp < filter.Since {
+			if filter.Since != 0 && env.Timestamp < filter.Since {
 				return nil
 			}
-			results = append(results, entry)
+			results = append(results, env)
 			return nil
 		})
 	})

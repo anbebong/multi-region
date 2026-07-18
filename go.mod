@@ -1,4 +1,4 @@
-module github.com/lancsnet/multi-region
+module github.com/anbebong/multi-region
 
 go 1.25.0
 

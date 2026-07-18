@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>multi-region — admin dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  section { margin-bottom: 2rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
+  th { background: #f5f5f5; }
+  button { padding: 0.4rem 0.8rem; cursor: pointer; }
+  textarea, input { font-family: monospace; }
+  .status-grid { display: grid; grid-template-columns: repeat(2, minmax(200px, 1fr)); gap: 0.5rem 1.5rem; }
+  .status-grid div { padding: 0.3rem 0; }
+  .label { color: #666; }
+  #configResult, #logsError { font-size: 0.85rem; color: #444; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+  <h1>multi-region — admin dashboard</h1>
+  <p>Trang tĩnh gọi trực tiếp <code>api/v1/admin/...</code> của node đang phục vụ trang này. Đây là ví dụ minh họa "Web" trong luồng <code>agent → service → web</code>; không phải giao diện chính thức.</p>
+
+  <section>
+    <h2>Status</h2>
+    <div class="status-grid" id="status">đang tải...</div>
+    <button onclick="loadStatus()">Làm mới</button>
+  </section>
+
+  <section>
+    <h2>Logs cục bộ</h2>
+    <button onclick="loadLogs()">Tải logs</button>
+    <table>
+      <thead><tr><th>id</th><th>kind</th><th>timestamp</th><th>payload</th></tr></thead>
+      <tbody id="logsBody"></tbody>
+    </table>
+    <div id="logsError"></div>
+  </section>
+
+  <section>
+    <h2>Đẩy config xuống cây con</h2>
+    <div>
+      <label>data:<br><textarea id="configData" rows="3" cols="60"></textarea></label>
+    </div>
+    <button onclick="pushConfig()">Gửi xuống</button>
+    <div id="configResult"></div>
+  </section>
+
+<script>
+async function loadStatus() {
+  const el = document.getElementById('status');
+  el.textContent = 'đang tải...';
+  try {
+    const r = await fetch('/api/v1/admin/status');
+    const s = await r.json();
+    el.innerHTML = `
+      <div><span class="label">id:</span> ${s.id}</div>
+      <div><span class="label">listen_addr:</span> ${s.listen_addr || '(none)'}</div>
+      <div><span class="label">has_parent:</span> ${s.has_parent}</div>
+      <div><span class="label">connected_to_parent:</span> ${s.connected_to_parent}</div>
+      <div><span class="label">children_count:</span> ${s.children_count}</div>
+    `;
+  } catch (e) {
+    el.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function loadLogs() {
+  const body = document.getElementById('logsBody');
+  const err = document.getElementById('logsError');
+  body.innerHTML = '';
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/v1/admin/logs');
+    const entries = await r.json();
+    for (const e of (entries || [])) {
+      const tr = document.createElement('tr');
+      const payload = e.payload ? atob(e.payload) : '';
+      tr.innerHTML = `<td>${e.id}</td><td>${e.kind}</td><td>${new Date(e.timestamp * 1000).toLocaleString()}</td><td>${payload}</td>`;
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    err.textContent = 'lỗi: ' + e;
+  }
+}
+
+async function pushConfig() {
+  const data = document.getElementById('configData').value;
+  const result = document.getElementById('configResult');
+  result.textContent = 'đang gửi...';
+  try {
+    const r = await fetch('/api/v1/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
+    });
+    result.textContent = r.ok ? 'đã đẩy config xuống cây con.' : 'lỗi: ' + r.status;
+  } catch (e) {
+    result.textContent = 'lỗi: ' + e;
+  }
+}
+
+loadStatus();
+loadLogs();
+</script>
+</body>
+</html>

@@ -2,24 +2,29 @@ syntax = "proto3";
 
 package node;
 
-option go_package = "github.com/lancsnet/multi-region/proto";
+option go_package = "github.com/anbebong/multi-region/proto";
 
-message LogEntry {
+// Envelope is the one and only unit of data the framework moves between a
+// child and its parent. kind is opaque to the framework — it exists purely
+// so the service built on top of this framework can distinguish what it put
+// in payload ("log", "config", or anything else it invents later) without
+// requiring any change to this proto or to the transport/node packages.
+message Envelope {
   string id = 1;
-  string node_id = 2;
-  int64 timestamp = 3;
-  bytes payload = 4;
+  string kind = 2;
+  bytes payload = 3;
+  int64 timestamp = 4;
 }
 
-message ConfigPayload {
-  string version = 1;
-  bytes data = 2;
-}
-
+// StreamMessage carries an Envelope in exactly one direction on the shared
+// bidirectional stream: upstream (child -> parent) or downstream
+// (parent -> child). The framework forwards each direction recursively
+// (upstream keeps going up if this node itself has a parent; downstream
+// keeps going down to this node's own children) without inspecting kind.
 message StreamMessage {
-  oneof body {
-    LogEntry log = 1;
-    ConfigPayload config = 2;
+  oneof direction {
+    Envelope upstream = 1;
+    Envelope downstream = 2;
   }
 }
 
