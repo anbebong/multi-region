@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/anbebong/multi-region/metrics"
 	"github.com/anbebong/multi-region/proto"
 	"github.com/anbebong/multi-region/resolver"
 )
@@ -257,6 +258,7 @@ func (c *Client) recvLoop(stream proto.NodeService_DownstreamClient) {
 			c.mu.Unlock()
 			return
 		}
+		metrics.EnvelopesReceived.WithLabelValues("downstream").Inc()
 		if c.onDownstream != nil {
 			log.Printf("[transport] received downstream id=%s kind=%q from parent", env.Id, env.Kind)
 			c.onDownstream(env)
@@ -275,6 +277,18 @@ func (c *Client) recvLoop(stream proto.NodeService_DownstreamClient) {
 // call (grpc.ClientStream.Send is not safe for concurrent use), so
 // concurrent callers queue up here rather than racing on the stream.
 func (c *Client) SendUpstream(ctx context.Context, env *proto.Envelope) error {
+	start := time.Now()
+	err := c.sendUpstream(ctx, env)
+	if err != nil {
+		metrics.ForwardLatencySeconds.WithLabelValues("failure").Observe(time.Since(start).Seconds())
+		return err
+	}
+	metrics.EnvelopesSent.WithLabelValues("upstream").Inc()
+	metrics.ForwardLatencySeconds.WithLabelValues("success").Observe(time.Since(start).Seconds())
+	return nil
+}
+
+func (c *Client) sendUpstream(ctx context.Context, env *proto.Envelope) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 

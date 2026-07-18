@@ -34,6 +34,7 @@ import (
 
 	"github.com/anbebong/multi-region/auth"
 	"github.com/anbebong/multi-region/examples/node/storage"
+	"github.com/anbebong/multi-region/metrics"
 	"github.com/anbebong/multi-region/node"
 	"github.com/anbebong/multi-region/proto"
 	"github.com/anbebong/multi-region/resolver"
@@ -160,6 +161,7 @@ func startAPIServer(addr string, n *node.Node, store storage.Storage, allowList 
 	mux.HandleFunc("POST /api/v1/admin/allowed-children", handleApproveChild(allowList))
 	mux.HandleFunc("DELETE /api/v1/admin/allowed-children/{node_id}", handleRevokeChild(allowList))
 	mux.HandleFunc("GET /api/v1/admin/pending-children", handlePendingChildren(n))
+	mux.Handle("GET /metrics", metrics.Handler())
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {

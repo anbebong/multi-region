@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/anbebong/multi-region/auth"
+	"github.com/anbebong/multi-region/metrics"
 	"github.com/anbebong/multi-region/proto"
 )
 
@@ -201,9 +202,11 @@ func (s *Server) BroadcastDownstream(env *proto.Envelope) (*BroadcastResult, err
 		select {
 		case ch <- env:
 			result.Delivered++
+			metrics.EnvelopesSent.WithLabelValues("downstream").Inc()
 		default:
 			log.Printf("[transport] child %s send buffer full, dropped downstream kind=%q", id, env.Kind)
 			result.Dropped = append(result.Dropped, id)
+			metrics.EnvelopesDropped.WithLabelValues("downstream", "buffer_full").Inc()
 		}
 	}
 	if len(result.Dropped) > 0 {
@@ -235,8 +238,10 @@ func (s *Server) SendToChild(nodeID string, env *proto.Envelope) error {
 	}
 	select {
 	case ch <- env:
+		metrics.EnvelopesSent.WithLabelValues("downstream").Inc()
 		return nil
 	default:
+		metrics.EnvelopesDropped.WithLabelValues("downstream", "buffer_full").Inc()
 		return fmt.Errorf("send buffer full for child %q, dropped downstream kind=%q", nodeID, env.Kind)
 	}
 }
@@ -251,6 +256,9 @@ func (s *Server) Upstream(stream proto.NodeService_UpstreamServer) error {
 		return err
 	}
 
+	metrics.ChildConnections.WithLabelValues("upstream").Inc()
+	defer metrics.ChildConnections.WithLabelValues("upstream").Dec()
+
 	for {
 		env, err := stream.Recv()
 		if err == io.EOF {
@@ -259,6 +267,7 @@ func (s *Server) Upstream(stream proto.NodeService_UpstreamServer) error {
 		if err != nil {
 			return err
 		}
+		metrics.EnvelopesReceived.WithLabelValues("upstream").Inc()
 		log.Printf("[transport] child (node-id=%q) sent upstream id=%s kind=%q", nodeID, env.Id, env.Kind)
 		if s.onUpstream != nil {
 			if err := s.onUpstream(stream.Context(), env); err != nil {
@@ -277,11 +286,12 @@ func (s *Server) Downstream(_ *proto.Ack, stream proto.NodeService_DownstreamSer
 		return err
 	}
 
-	key := s.registerChild(nodeID)
-	downstreamCh := s.children[key]
+	key, downstreamCh := s.registerChild(nodeID)
+	metrics.ChildConnections.WithLabelValues("downstream").Inc()
 	log.Printf("[transport] child %q connected (%d children now connected)", key, s.ChildrenCount())
 	defer func() {
 		s.unregisterChild(key)
+		metrics.ChildConnections.WithLabelValues("downstream").Dec()
 		log.Printf("[transport] child %q disconnected (%d children now connected)", key, s.ChildrenCount())
 	}()
 
@@ -306,6 +316,7 @@ func (s *Server) authorize(ctx context.Context, nodeID string) error {
 	s.mu.Unlock()
 	if err := authorize(ctx, nodeID); err != nil {
 		log.Printf("[transport] rejected child connection (node-id=%q): %v", nodeID, err)
+		metrics.ChildRejections.Inc()
 		s.recordRejection(nodeID, err)
 		return fmt.Errorf("connection rejected: %w", err)
 	}
@@ -341,12 +352,16 @@ func (s *Server) clearRejection(nodeID string) {
 	delete(s.pending, nodeID)
 }
 
-// registerChild adds a new Downstream entry keyed by its claimed node-id.
+// registerChild adds a new Downstream entry keyed by its claimed node-id,
+// and returns both the key and its channel — the caller must not read
+// s.children[key] separately afterwards without holding s.mu, since another
+// goroutine's unregisterChild could race with that read; returning the
+// channel here avoids that race entirely.
 // If nodeID is empty (the child sent no node-id metadata) or already in use
 // by another currently-connected child, a unique synthetic key is used
 // instead so the connection is still tracked, just not addressable via
 // SendToChild.
-func (s *Server) registerChild(nodeID string) string {
+func (s *Server) registerChild(nodeID string) (string, chan *proto.Envelope) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nodeID
@@ -357,8 +372,9 @@ func (s *Server) registerChild(nodeID string) string {
 		s.anonSeq++
 		key = fmt.Sprintf("%s(dup-%d)", nodeID, s.anonSeq)
 	}
-	s.children[key] = make(chan *proto.Envelope, 16)
-	return key
+	ch := make(chan *proto.Envelope, 16)
+	s.children[key] = ch
+	return key, ch
 }
 
 func (s *Server) unregisterChild(key string) {
